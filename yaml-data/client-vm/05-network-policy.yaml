@@ -1,0 +1,54 @@
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: deny-from-other-namespaces
+
+spec:
+  podSelector: {} # 이 네임스페이스의 모든 파드에 적용
+  ingress:
+  - from:
+    - podSelector: {} # 자기 네임스페이스 내부 통신만 허용
+
+---
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: strict-egress-isolation
+  namespace: {{NAMESPACE}}
+
+spec:
+  podSelector: {} # 네임스페이스 내 모든 VM/Pod 적용
+  policyTypes:
+  - Egress
+  egress:
+
+  # 자기 네임스페이스 내부 통신 허용
+  - to:
+    - podSelector: {} # 자기 네임스페이스 내부 통신 허용
+
+  # 1. DNS 쿼리 허용 (이게 없으면 도메인 해석이 안 되어 외부 인터넷도 불가)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+
+
+  # 2. 외부 인터넷 통신 허용 (단, 사설 IP 대역은 제외)
+  # 클라우드 메타데이터(169.254.169.254)와 내부망(10.0.0.0/8 등) 접근을 원천 차단
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8       # 쿠버네티스 내부 Pod 대역 (환경에 맞게 수정)
+        - 172.16.0.0/12    # 서비스/노드 대역
+        - 192.168.0.0/16   # 로컬 사설 대역
+        - 169.254.169.254/32 # 클라우드 메타데이터 API (핵심 차단 대상)

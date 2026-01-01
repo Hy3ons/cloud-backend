@@ -1,0 +1,16 @@
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: {{VM_NAME}}-disk         # 사용자가 가질 실제 디스크 이름
+
+spec:
+  source:
+    pvc:
+      name: ubuntu-2204-gold-source
+      namespace: cloud-admin      # 다른 네임스페이스의 원본을 참조
+
+  pvc:
+    accessModes: ["ReadWriteOnce"]
+    resources:
+      requests:
+        storage: 20Gi            # 원본보다 크게 설정하면 자동 확장(Resize)됨

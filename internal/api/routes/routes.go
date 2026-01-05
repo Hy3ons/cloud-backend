@@ -1,27 +1,21 @@
 package routes
 
 import (
-	"vm-controller/internal/api/controllers"
+	controllers "vm-controller/internal/api/controllers"
 
 	gin "github.com/gin-gonic/gin"
 )
 
-func SetupRouter(healthController *controllers.HealthController) *gin.Engine {
+func SetupRouter() *gin.Engine {
 	r := gin.Default()
 
 	// Health Check
-	r.GET("/health", healthController.Check)
+	controllers.GetHealthController().RegisterRoutes(r.Group("/"))
 
 	// API Group
 	api := r.Group("/api")
-	{
-		// Add future routes here
-		api.GET("/ping", func(c *gin.Context) {
-			c.JSON(200, gin.H{
-				"message": "pong",
-			})
-		})
-	}
+	controllers.GetAuthController().RegisterRoutes(api)
+	controllers.GetVirtualMachineController().RegisterRoutes(api)
 
 	return r
 }

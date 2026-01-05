@@ -39,8 +39,8 @@ type DeploymentParams struct {
 	NodePort      int32
 }
 
-// NewK8sService returns a singleton instance of K8sService
-func NewK8sService() (*K8sService, error) {
+// 싱글톤 인스턴스 반환 함수
+func GetK8sService() (*K8sService, error) {
 	var err error
 	once.Do(func() {
 		// 1. Config 생성 (InCluster 우선, 실패시 로컬 kubeconfig)
@@ -154,6 +154,7 @@ func (s *K8sService) checkInjection(userNamespace, vmName, password, dnsHost, ma
 	cleanDir := filepath.Clean(manifestDir)
 	if strings.Contains(cleanDir, "..") || strings.HasPrefix(cleanDir, "/") || strings.HasPrefix(cleanDir, "\\") {
 		// handle path traversal if needed
+		return fmt.Errorf("invalid manifest directory: %s (contains invalid characters)", manifestDir)
 	}
 
 	return nil
@@ -188,53 +189,107 @@ func (s *K8sService) CreateUserVM(userNamespace, vmName, password, dnsHost, mani
 		return nil, err
 	}
 
-	//하드코딩된 yaml 파일들 폴더에 있는 것 모두 가져오기.
-	files, err := os.ReadDir(manifestDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read manifest directory: %v", err)
-	}
-
-	decUnstructured := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
-
 	vmInfo := &VMInfo{
-		Namespace:        userNamespace,
-		Name:             vmName,
-		Port:             vmPort,
-		Password:         password,
-		DNSHost:          dnsHost,
-		CreatedResources: []CreatedResource{},
+		Namespace: userNamespace,
+		Name:      vmName,
+		Port:      vmPort,
+		Password:  password,
+		DNSHost:   dnsHost,
 	}
+
+	// 롤백을 위한 성공 여부 플래그
+	var success bool
+	// 이 함수에서 생성한 모든 리소스를 추적 (init + vm)
+	var allCreatedResources []CreatedResource
+
+	// defer를 사용하여 작업 실패 시 롤백(삭제) 수행
+	defer func() {
+		if !success {
+			fmt.Println("CreateUserVM failed. Rolling back created resources...")
+			// 생성의 역순으로 삭제
+			for i := len(allCreatedResources) - 1; i >= 0; i-- {
+				res := allCreatedResources[i]
+				fmt.Printf("Rolling back resource: %s %s/%s\n", res.Kind, res.Namespace, res.Name)
+				if errRaw := s.deleteResource(res); errRaw != nil {
+					fmt.Printf("Failed to delete resource %s %s/%s during rollback: %v\n", res.Kind, res.Namespace, res.Name, errRaw)
+				}
+			}
+		}
+	}()
+
+	// 1. Client Init Resources (yaml-data/client-init) - 이미 존재하면 무시(Skip)
+	// manifestDir가 "yaml-data/client-vm"이라면 상위 폴더의 client-init을 찾음
+	initDir := filepath.Join(filepath.Dir(manifestDir), "client-init")
+	// 혹시 경로가 안맞을 수 있으니 단순 하드코딩 백업 혹은 체크
+	if _, err := os.Stat(initDir); os.IsNotExist(err) {
+		// manifestDir와 관계없이 절대 경로 혹은 상대 경로로 체크해볼 수도 있음.
+		// 여기서는 "yaml-data/client-init"을 기본으로 시도
+		initDir = "yaml-data/client-init"
+	}
+
+	initReplacements := map[string]string{
+		"{{NAMESPACE}}": userNamespace,
+	}
+
+	initCreated, err := s.applyManifests(initDir, initReplacements, userNamespace, true)
+	if err != nil {
+		// init 과정 실패 시에도 롤백 발동 (여기까지 생성된 것 삭제)
+		return nil, fmt.Errorf("failed to apply client-init manifests: %v", err)
+	}
+	allCreatedResources = append(allCreatedResources, initCreated...)
+
+	// 2. Client VM Resources (yaml-data/client-vm)
+	vmReplacements := map[string]string{
+		"{{NAMESPACE}}": userNamespace,
+		"{{NODEPORT}}":  fmt.Sprintf("%d", vmPort),
+		"{{VM_NAME}}":   vmName,
+		"{{DNS_HOST}}":  dnsHost,
+		"{{PASSWORD}}":  password,
+	}
+
+	vmCreated, err := s.applyManifests(manifestDir, vmReplacements, userNamespace, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply client-vm manifests: %v", err)
+	}
+	allCreatedResources = append(allCreatedResources, vmCreated...)
+
+	// 성공적으로 완료되었음을 표시 (롤백 방지)
+	success = true
+	// 최종 VMInfo에는 VM 관련 리소스만 넣을지, Init 포함할지 결정.
+	// 사용자의 요청 "적용하는데 성공한 obj 들을 배열에 담아둿다가..."는 롤백 로직을 위한 것이었음.
+	// 리턴값은 VM 관련 리소스 정보로 채움.
+	vmInfo.CreatedResources = vmCreated
+
+	return vmInfo, nil
+}
+
+// applyManifests iterates over yamls in a directory, applies replacements, and creates resources.
+// ignoreExists: if true, "already exists" error is ignored and resource is NOT returned as created.
+func (s *K8sService) applyManifests(dir string, replacements map[string]string, defaultNamespace string, ignoreExists bool) ([]CreatedResource, error) {
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory %s: %v", dir, err)
+	}
+
+	var created []CreatedResource
+	decUnstructured := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
 
 	for _, file := range files {
 		if file.IsDir() || !strings.HasSuffix(file.Name(), ".yaml") {
 			continue
 		}
 
-		path := filepath.Join(manifestDir, file.Name())
+		path := filepath.Join(dir, file.Name())
 		content, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read file %s: %v", file.Name(), err)
+			return created, fmt.Errorf("failed to read file %s: %v", file.Name(), err)
 		}
 
-		// 텍스트 치환 (템플릿 처리)
 		text := string(content)
+		for k, v := range replacements {
+			text = strings.ReplaceAll(text, k, v)
+		}
 
-		// 1. Namespace 치환 (YAML에 {{NAMESPACE}}가 있다면)
-		text = strings.ReplaceAll(text, "{{NAMESPACE}}", userNamespace)
-
-		// 2. NodePort 치환 (기존 30002 -> 입력받은 포트)
-		text = strings.ReplaceAll(text, "{{NODEPORT}}", fmt.Sprintf("%d", vmPort))
-
-		// 3. VM Name 치환 (기존 my-cloud-vps -> 입력받은 이름)
-		text = strings.ReplaceAll(text, "{{VM_NAME}}", vmName)
-
-		// 4. DNS Host 치환 (기존 vps.hy3on.site -> 입력받은 DNS)
-		text = strings.ReplaceAll(text, "{{DNS_HOST}}", dnsHost)
-
-		// 5. root 계정 Password 치환
-		text = strings.ReplaceAll(text, "{{PASSWORD}}", password)
-
-		// Multi-document support handling (e.g. separated by ---)
 		docs := strings.Split(text, "\n---\n")
 		for _, doc := range docs {
 			if strings.TrimSpace(doc) == "" {
@@ -244,19 +299,18 @@ func (s *K8sService) CreateUserVM(userNamespace, vmName, password, dnsHost, mani
 			obj := &unstructured.Unstructured{}
 			_, gvk, err := decUnstructured.Decode([]byte(doc), nil, obj)
 			if err != nil {
-				return nil, fmt.Errorf("failed to decode yaml in %s: %v", file.Name(), err)
+				return created, fmt.Errorf("failed to decode yaml in %s: %v", file.Name(), err)
 			}
 
-			// Namespace 강제 주입 (ClusterScoped 리소스 제외)
-			// NetworkPolicy, Service, VirtualMachine, DataVolume 등은 Namespaced임.
-			// ResourceQuota도 Namespaced.
-			// YAML에 namespace 필드가 없거나, 있더라도 덮어씀.
-			obj.SetNamespace(userNamespace)
+			// Namespace 설정 (없는 경우 defaultNamespace 주입)
+			if obj.GetNamespace() == "" {
+				obj.SetNamespace(defaultNamespace)
+			}
 
-			// Mapping GVK to GVR
+			// GVR 매핑
 			mapping, err := s.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 			if err != nil {
-				return nil, fmt.Errorf("failed to find mapping for %s: %v", gvk.String(), err)
+				return created, fmt.Errorf("failed to find mapping for %s: %v", gvk.String(), err)
 			}
 
 			var dri dynamic.ResourceInterface
@@ -266,43 +320,63 @@ func (s *K8sService) CreateUserVM(userNamespace, vmName, password, dnsHost, mani
 				dri = s.dynamicClient.Resource(mapping.Resource)
 			}
 
-			// Apply (Server-Side Apply 추천하지만, 간단히 Create or Update 전략 사용)
-			// 여기서는 단순 Create 시도 후 이미 존재하면 Update 시도 로직 등을 쓸 수 있으나,
-			// "VM제공하는 클라우드 서비스" 특성상 생성 실패시 에러가 나을 수 있음.
-			// 다만, 멱등성을 위해 Apply(Patch)를 사용하는 것이 좋음.
-
-			// data := []byte(doc) // Original json/yaml data needed for patch? No, unstructured obj is enough
-			// Apply using ServerSideApply
-			// force := true
-			// _, err = dri.Patch(context.Background(), obj.GetName(), types.ApplyPatchType, []byte(doc), metav1.PatchOptions{FieldManager: "vm-controller", Force: &force})
-
-			// 간단하게 Create 먼저 시도.
+			// Create Resource
 			createdObj, err := dri.Create(context.Background(), obj, metav1.CreateOptions{})
 			if err != nil {
 				if strings.Contains(err.Error(), "already exists") {
-					// 이미 존재하면 넘어가거나, Update 로직?
-					// VM같은 경우 상태가 있어서 함부로 Update하면 리스타트 될 수 있음.
-					// 우선 Log만 찍고 스킵.
-					fmt.Printf("Resource %s %s already exists, skipping.\n", gvk.Kind, obj.GetName())
-					// 이미 존재하더라도 Get을 통해 정보를 가져오는 것이 추적에 도움이 될 수 있음.
-					// 여기서는 간단히 Skip. 필요하면 Get 호출 추가 가능.
-				} else {
-					return nil, fmt.Errorf("failed to create resource %s: %v", gvk.Kind, err)
+					if ignoreExists {
+						// 이미 존재하면 무시하고 넘어감 (롤백 대상 아님)
+						fmt.Printf("Resource %s %s/%s already exists, skipping.\n", gvk.Kind, obj.GetNamespace(), obj.GetName())
+						continue
+					} else {
+						// VM 생성 시 중복은 에러로 처리하거나, 여기서도 로그만 찍고 넘어갈 수 있음.
+						// 기존 로직은 로그 찍고 넘어가는 것이었음. ("already exists, skipping")
+						// 하지만 "원자성"을 위해 새로 생성하려던 것이 이미 있으면 실패로 보는게 맞을 수도 있고,
+						// 재시도 관점에서는 성공으로 볼 수도 있음.
+						// 여기서는 기존 로직(로그 찍고 스킵)을 유지하되, Created 목록에는 넣지 않음 -> 롤백 안함.
+						fmt.Printf("Resource %s %s/%s already exists, skipping (not tracking for rollback).\n", gvk.Kind, obj.GetNamespace(), obj.GetName())
+						continue
+					}
 				}
-			} else {
-				fmt.Printf("Successfully created %s: %s\n", gvk.Kind, obj.GetName())
-				// 생성된 리소스 정보 저장
-				vmInfo.CreatedResources = append(vmInfo.CreatedResources, CreatedResource{
-					Group:     gvk.Group,
-					Version:   gvk.Version,
-					Kind:      gvk.Kind,
-					Name:      createdObj.GetName(),
-					Namespace: createdObj.GetNamespace(),
-					UID:       createdObj.GetUID(),
-				})
+				return created, fmt.Errorf("failed to create resource %s: %v", gvk.Kind, err)
 			}
+
+			fmt.Printf("Successfully created %s: %s\n", gvk.Kind, createdObj.GetName())
+			created = append(created, CreatedResource{
+				Group:     gvk.Group,
+				Version:   gvk.Version,
+				Kind:      gvk.Kind,
+				Name:      createdObj.GetName(),
+				Namespace: createdObj.GetNamespace(),
+				UID:       createdObj.GetUID(),
+			})
 		}
 	}
+	return created, nil
+}
 
-	return vmInfo, nil
+// deleteResource deletes a specific resource
+func (s *K8sService) deleteResource(res CreatedResource) error {
+	gvk := schema.GroupVersionKind{
+		Group:   res.Group,
+		Version: res.Version,
+		Kind:    res.Kind,
+	}
+	mapping, err := s.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return err
+	}
+
+	var dri dynamic.ResourceInterface
+	if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
+		dri = s.dynamicClient.Resource(mapping.Resource).Namespace(res.Namespace)
+	} else {
+		dri = s.dynamicClient.Resource(mapping.Resource)
+	}
+
+	// 백그라운드 삭제 (즉시 반환하지 않고 K8s가 알아서 GC하도록)
+	deletePolicy := metav1.DeletePropagationBackground
+	return dri.Delete(context.Background(), res.Name, metav1.DeleteOptions{
+		PropagationPolicy: &deletePolicy,
+	})
 }

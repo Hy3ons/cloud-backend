@@ -6,17 +6,52 @@ import (
 
 	"net/http"
 
+	os "os"
+
+	sync "sync"
+
 	gin "github.com/gin-gonic/gin"
 	jwt "github.com/golang-jwt/jwt/v5"
-	os "os"
 )
 
 type AuthController struct {
+	userService *userservice.UserService
+}
+
+var (
+	authController *AuthController
+	once           sync.Once
+)
+
+func GetAuthController() *AuthController {
+	once.Do(func() {
+		authController = &AuthController{
+			userService: &userservice.UserService{},
+		}
+	})
+
+	return authController
+}
+
+func (authController *AuthController) RegisterRoutes(r *gin.RouterGroup) {
+	auth := r.Group("/auth")
+	auth.POST("/login", authController.Login)
+}
+
+type LoginParams struct {
+	StudentId string `json:"student_id"`
+	Password  string `json:"password"`
 }
 
 func (authController *AuthController) Login(c *gin.Context) {
-	userService := &userservice.UserService{}
-	user, err := userService.AuthenticateUser(c.PostForm("student_id"), c.PostForm("password"))
+	var loginParams LoginParams
+
+	if err := c.ShouldBindJSON(&loginParams); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "로그인 정보를 정확하게 전달하세요."})
+		return
+	}
+
+	user, err := authController.userService.AuthenticateUser(loginParams.StudentId, loginParams.Password)
 
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "인증 실패"})

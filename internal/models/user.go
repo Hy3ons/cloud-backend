@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// User 구조체는 시스템에 등록된 사용자를 나타냅니다.
+// User 구조체는 시스템에 등록된 사용자를 나타냅니다. PK Column name : id
 type User struct {
 	gorm.Model
 	Username      string           `gorm:"column:username;uniqueIndex;not null"`        // 사용자 고유 ID (유니크)

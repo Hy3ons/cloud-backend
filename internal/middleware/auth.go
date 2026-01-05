@@ -9,6 +9,7 @@ import (
 
 	fmt "fmt"
 	jwt "github.com/golang-jwt/jwt/v5"
+	"time"
 )
 
 func AuthGuard() gin.HandlerFunc {
@@ -50,6 +51,19 @@ func AuthGuard() gin.HandlerFunc {
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok || !token.Valid {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "토큰 클레임을 읽을 수 없습니다."})
+			c.Abort()
+			return
+		}
+
+		exp, ok := claims["exp"]
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "토큰에 만료 시간이 누락되었습니다."})
+			c.Abort()
+			return
+		}
+
+		if time.Now().Unix() > int64(exp.(float64)) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "토큰이 만료되었습니다."})
 			c.Abort()
 			return
 		}

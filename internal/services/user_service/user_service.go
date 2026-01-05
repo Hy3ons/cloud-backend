@@ -26,3 +26,27 @@ func (s *UserService) AuthenticateUser(studentID, password string) (*models.User
 
 	return &user, nil
 }
+
+func (s *UserService) FetchUserById(userId string) (*models.User, error) {
+	database := db.GetDB()
+
+	var user models.User
+
+	if err := database.Where("id = ?", userId).First(&user).Error; err != nil {
+		return nil, err
+	}
+
+	return &user, nil
+}
+
+func (s *UserService) FetchUserByStudentId(studentId string) (*models.User, error) {
+	database := db.GetDB()
+
+	var user models.User
+
+	if err := database.Where("user_student_id = ?", studentId).First(&user).Error; err != nil {
+		return nil, err
+	}
+
+	return &user, nil
+}

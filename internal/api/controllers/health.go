@@ -12,6 +12,17 @@ type HealthController struct {
 	K8sService *k8s_service.K8sService
 }
 
+func GetHealthController() *HealthController {
+	k8s_service, _ := k8s_service.GetK8sService()
+	return &HealthController{
+		K8sService: k8s_service,
+	}
+}
+
+func (h *HealthController) RegisterRoutes(group *gin.RouterGroup) {
+	group.GET("/health", h.Check)
+}
+
 func NewHealthController(k8sService *k8s_service.K8sService) *HealthController {
 	return &HealthController{
 		K8sService: k8sService,

@@ -1,11 +1,11 @@
 package vmservice
 
 import (
+	"errors"
 	"sync"
 	"vm-controller/internal/db"
 	"vm-controller/internal/models"
 
-	"errors"
 	"gorm.io/gorm"
 )
 
@@ -25,7 +25,7 @@ func GetVmService() *VmService {
 	return vmService
 }
 
-func (vmService *VmService) FetchUserVMs(userId string) ([]models.VirtualMachine, error) {
+func (vmService *VmService) FetchUserVMs(userId string, containPassword bool) ([]models.VirtualMachine, error) {
 	db := db.GetDB()
 
 	var vms []models.VirtualMachine
@@ -35,15 +35,21 @@ func (vmService *VmService) FetchUserVMs(userId string) ([]models.VirtualMachine
 		return nil, err
 	}
 
+	if !containPassword {
+		for i := range vms {
+			vms[i].Password = ""
+		}
+	}
+
 	return vms, nil
 }
 
-func (vmService *VmService) FetchVmName(vmName string) (*models.VirtualMachine, error) {
+func (vmService *VmService) FetchVmName(vmName string, containPassword bool) (*models.VirtualMachine, error) {
 	db := db.GetDB()
 
 	var vm models.VirtualMachine
 
-	if err := db.Where("vm_name = ?", vmName).First(&vm).Error; err != nil {
+	if err := db.Where("name = ?", vmName).First(&vm).Error; err != nil {
 		//하나의 행도 발견 못하면, 다음과 같은 에러를 내뱉음 Gorm
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -53,13 +59,26 @@ func (vmService *VmService) FetchVmName(vmName string) (*models.VirtualMachine, 
 		return nil, err
 	}
 
+	if !containPassword {
+		vm.Password = ""
+	}
+
 	return &vm, nil
 }
 
-func (vmService *VmService) CreateUserVM(namespace string, vmName string, vmSSHPassword string, vmHost string, vmImage string, vmPort int32) (*models.VirtualMachine, error) {
+func (vmService *VmService) CreateUserVM(params CreateVmParams) (*models.VirtualMachine, error) {
 	db := db.GetDB()
 
-	var vm models.VirtualMachine
+	vm := models.VirtualMachine{
+		Name:      params.VmName,
+		Namespace: params.Namespace,
+		Password:  params.VmPassword,
+		NodePort:  params.VmSSHPort,
+		DiskNum:   params.VmDiskNum,
+		UserID:    params.UserID,
+		Image:     params.VmImage,
+		Status:    models.VmStatusProvisioning,
+	}
 
 	if err := db.Create(&vm).Error; err != nil {
 		return nil, err
@@ -71,7 +90,7 @@ func (vmService *VmService) CreateUserVM(namespace string, vmName string, vmSSHP
 func (vmService *VmService) UpdateVmStatus(vmName string, status models.EnumVmStatus) error {
 	db := db.GetDB()
 
-	if err := db.Model(&models.VirtualMachine{}).Where("vm_name = ?", vmName).Update("status", status).Error; err != nil {
+	if err := db.Model(&models.VirtualMachine{}).Where("name = ?", vmName).Update("status", status).Error; err != nil {
 		return err
 	}
 

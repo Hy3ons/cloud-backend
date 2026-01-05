@@ -8,8 +8,9 @@ import (
 	http "net/http"
 
 	fmt "fmt"
-	jwt "github.com/golang-jwt/jwt/v5"
 	"time"
+
+	jwt "github.com/golang-jwt/jwt/v5"
 )
 
 func AuthGuard() gin.HandlerFunc {
@@ -68,16 +69,26 @@ func AuthGuard() gin.HandlerFunc {
 			return
 		}
 
-		userID, ok := claims["user_id"]
+		userIDRaw, ok := claims["user_id"]
+
 		if !ok {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "토큰에 사용자 정보가 누락되었습니다."})
 			c.Abort()
 			return
 		}
 
-		// 5. Context에 user_id를 저장하여 이후 핸들러에서 c.Get("user_id")로 접근 가능하게 함
-		c.Set("user_id", userID)
+		var userID string
 
-		c.Next() // 다음 미들웨어 또는 핸들러로 진행
+		switch v := userIDRaw.(type) {
+		case string:
+			userID = v
+		case float64:
+			userID = fmt.Sprintf("%.0f", v)
+		default:
+			userID = fmt.Sprintf("%v", v)
+		}
+
+		c.Set("user_id", userID)
+		c.Next()
 	}
 }

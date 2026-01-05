@@ -8,6 +8,9 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
+	"vm-controller/internal/models"
+	vmservice "vm-controller/internal/services/vm_service"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,6 +26,10 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+// Policy:
+// K8sService 는 최상위 서비스로 간주합니다. 로직상 제일 편하고 깔끔해짐
+// 다른 서비스는 K8sService를 의존성으로 사용할 수 없습니다.
+// 순환의존성 방지
 type K8sService struct {
 	dynamicClient dynamic.Interface
 	mapper        meta.RESTMapper
@@ -379,4 +386,111 @@ func (s *K8sService) deleteResource(res CreatedResource) error {
 	return dri.Delete(context.Background(), res.Name, metav1.DeleteOptions{
 		PropagationPolicy: &deletePolicy,
 	})
+}
+
+func (s *K8sService) DeleteVM(vm *models.VirtualMachine) error {
+	// TODO/
+	return nil
+}
+
+// waitForVMStatus는 VM의 상태가 원하는 상태(desiredStatus)가 될 때까지 5초 간격으로 폴링합니다.
+// 최대 1분간 대기하며, 시간 내에 상태가 변경되지 않으면 타임아웃 에러를 반환합니다.
+func (s *K8sService) waitForVMStatus(namespace, name, desiredStatus string) error {
+	ctx := context.Background()
+	gvrVM := schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "virtualmachines"}
+
+	// 1분 타임아웃 설정
+	timeout := time.After(1 * time.Minute)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for VM status to become %s", desiredStatus)
+		case <-ticker.C:
+			// VM 리소스 조회
+			vmObj, err := s.dynamicClient.Resource(gvrVM).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return fmt.Errorf("failed to get VM status: %v", err)
+			}
+
+			// status.printableStatus 필드 확인
+			// KubeVirt는 status.printableStatus에 현재 상태를 문자열로 제공함 (e.g. "Running", "Stopped", "Provisioning")
+			status, found, err := unstructured.NestedString(vmObj.Object, "status", "printableStatus")
+			if !found || err != nil {
+				// 아직 status 필드가 없을 수 있음 (초기화 중)
+				continue
+			}
+
+			if strings.EqualFold(status, desiredStatus) {
+				return nil
+			}
+		}
+	}
+}
+
+// StopVM은 VM을 중지하고 리소스를 삭제합니다.
+// 1. DB의 VM 상태를 'Stopping'으로 업데이트합니다.
+// 2. K8s 상의 VirtualMachine 리소스만 삭제합니다.
+// 3. 삭제가 완료되면 DB의 VM 상태를 'Stopped'로 업데이트합니다.
+func (s *K8sService) StopVM(vm *models.VirtualMachine) error {
+	ctx := context.Background()
+
+	// 1. 상태 업데이트: Stopping
+	if err := vmservice.GetVmService().UpdateVmStatus(vm.Name, models.VmStatusStopping); err != nil {
+		return fmt.Errorf("failed to update VM status to Stopping: %v", err)
+	}
+
+	// 2. Spec Patch: running = false
+	gvrVM := schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "virtualmachines"}
+	data := []byte(`{"spec":{"running":false}}`)
+	_, err := s.dynamicClient.Resource(gvrVM).Namespace(vm.Namespace).Patch(
+		ctx, vm.Name, types.MergePatchType, data, metav1.PatchOptions{})
+
+	if err != nil {
+		return fmt.Errorf("failed to patch VM running state: %v", err)
+	}
+
+	// 3. Watch: Stopped 상태 대기
+	// 5초 간격으로 최대 1분동안 확인
+	if err := s.waitForVMStatus(vm.Namespace, vm.Name, "Stopped"); err != nil {
+		return fmt.Errorf("failed to wait for VM to stop: %v", err)
+	}
+
+	// 4. 상태 업데이트: Stopped
+	if err := vmservice.GetVmService().UpdateVmStatus(vm.Name, models.VmStatusStopped); err != nil {
+		return fmt.Errorf("failed to update VM status to Stopped: %v", err)
+	}
+
+	return nil
+}
+
+// StartVM은 VM을 시작(재시작)합니다.
+// 1. VM Spec을 Patch하여 running=true로 설정합니다.
+// 2. Watch를 통해 VM이 Running 상태가 될 때까지 대기합니다.
+// 3. 성공 시 DB의 VM 상태를 Running으로 업데이트합니다.
+func (s *K8sService) StartVM(vm *models.VirtualMachine) error {
+	ctx := context.Background()
+
+	// 1. Spec Patch: running = true
+	gvrVM := schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "virtualmachines"}
+	patchData := []byte(`{"spec": {"running": true}}`)
+	_, err := s.dynamicClient.Resource(gvrVM).Namespace(vm.Namespace).Patch(ctx, vm.Name, types.MergePatchType, patchData, metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to patch VM running state: %v", err)
+	}
+
+	// 2. Watch: Running 상태 대기
+	// 5초 간격으로 최대 1분동안 확인
+	if err := s.waitForVMStatus(vm.Namespace, vm.Name, "Running"); err != nil {
+		return fmt.Errorf("failed to wait for VM to start: %v", err)
+	}
+
+	// 3. DB Status Update: Running
+	if err := vmservice.GetVmService().UpdateVmStatus(vm.Name, models.VmStatusRunning); err != nil {
+		return fmt.Errorf("failed to update VM status to Running: %v", err)
+	}
+
+	return nil
 }

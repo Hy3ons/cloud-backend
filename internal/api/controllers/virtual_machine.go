@@ -4,13 +4,16 @@ import (
 	gin "github.com/gin-gonic/gin"
 	http "net/http"
 	sync "sync"
+	"vm-controller/internal/middleware"
 	k8s_service "vm-controller/internal/services/k8s_service"
 	userservice "vm-controller/internal/services/user_service"
+	vm_service "vm-controller/internal/services/vm_service"
 )
 
 type VirtualMachineController struct {
 	k8sService  *k8s_service.K8sService
 	userService *userservice.UserService
+	vmService   *vm_service.VmService
 }
 
 var (
@@ -19,11 +22,13 @@ var (
 )
 
 func (vmC *VirtualMachineController) RegisterRoutes(r *gin.RouterGroup) {
-	vm := r.Group("/vm")
+	vm := r.Group("/vm", middleware.AuthGuard())
+
 	vm.POST("/create", vmC.CreateVM)
 	vm.GET("/fetch", vmC.FetchUserVMs)
 	vm.POST("/stop", vmC.StopVM)
 	vm.DELETE("/delete", vmC.DeleteVM)
+	vm.POST("/start", vmC.StartVM)
 }
 
 func GetVirtualMachineController() *VirtualMachineController {
@@ -81,12 +86,93 @@ func (vmC *VirtualMachineController) CreateVM(c *gin.Context) {
 }
 
 func (vmC *VirtualMachineController) FetchUserVMs(c *gin.Context) {
+	user_id, _ := c.Get("user_id")
 
+	vms, err := vmC.vmService.FetchUserVMs(user_id.(string), false)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch VMs"})
+		return
+	}
+
+	// Password Is Not Sent To Client
+	c.JSON(http.StatusOK, gin.H{"vms": vms})
+}
+
+type StopVMParams struct {
+	VmName string `json:"vm_name"`
 }
 
 func (vmC *VirtualMachineController) StopVM(c *gin.Context) {
+	user_id, _ := c.Get("user_id")
 
+	var req StopVMParams
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	vm, _ := vmC.vmService.FetchVmName(req.VmName, false)
+
+	if string(vm.UserID) != user_id.(string) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	go vmC.k8sService.StopVM(vm)
+
+	c.JSON(http.StatusOK, gin.H{"vm": vm})
 }
-func (vmC *VirtualMachineController) DeleteVM(c *gin.Context) {
 
+type StartVMParams struct {
+	VmName string `json:"vm_name"`
+}
+
+func (vmC *VirtualMachineController) StartVM(c *gin.Context) {
+	user_id, _ := c.Get("user_id")
+
+	var req StartVMParams
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	vm, _ := vmC.vmService.FetchVmName(req.VmName, false)
+
+	if string(vm.UserID) != user_id.(string) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	go vmC.k8sService.StartVM(vm)
+
+	c.JSON(http.StatusOK, gin.H{"vm": vm})
+}
+
+type DeleteVMParams struct {
+	VmName string `json:"vm_name"`
+}
+
+func (vmC *VirtualMachineController) DeleteVM(c *gin.Context) {
+	user_id, _ := c.Get("user_id")
+
+	var req DeleteVMParams
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	vm, _ := vmC.vmService.FetchVmName(req.VmName, false)
+
+	if string(vm.UserID) != user_id.(string) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	go vmC.k8sService.DeleteVM(vm)
+
+	c.JSON(http.StatusOK, gin.H{"vm": vm})
 }

@@ -20,15 +20,59 @@ var (
 // InitDB는 환경 변수를 사용하여 데이터베이스 연결을 초기화합니다.
 // InitDB initializes the database connection using environment variables.
 func InitDB() error {
-	// 환경 변수에서 DB 접속 정보 로드
-	// Load DB connection info from environment variables
-	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=Asia/Seoul",
-		os.Getenv("DB_HOST"),
-		os.Getenv("DB_USER"),
-		os.Getenv("DB_PASSWORD"),
-		os.Getenv("DB_NAME"),
-		os.Getenv("DB_PORT"),
-	)
+	// 환경 변수 확인
+	databaseURL := os.Getenv("DATABASE_URL")
+	dbHost := os.Getenv("DB_HOST")
+	supabaseProjectID := os.Getenv("SUPABASE_PROJECT_ID")
+
+	if dbHost == "" && supabaseProjectID == "" {
+		return fmt.Errorf("no database configuration found (DB 설정이 없습니다)")
+	}
+
+	if dbHost != "" && supabaseProjectID != "" {
+		return fmt.Errorf("어떤 DataBase를 사용해야하는지 알 수 없습니다. 1개의 데이터베이스만 환경변수에 등록하세요.")
+	}
+
+	var dsn string
+
+	// 1순위: DATABASE_URL (직접 연결 문자열 사용)
+	// Priority 1: DATABASE_URL (Use direct connection string)
+	if databaseURL != "" {
+		log.Println("Initializing connection using DATABASE_URL... (DATABASE_URL을 사용하여 연결 초기화 중)")
+		dsn = databaseURL
+	} else {
+		// 2순위: DB_HOST와 SUPABASE_PROJECT_ID 중복 체크
+		if dbHost != "" && supabaseProjectID != "" {
+			return fmt.Errorf("어떤 DataBase를 사용해야하는지 알 수 없습니다. 1개의 데이터베이스만 환경변수에 등록하세요.")
+		}
+
+		if supabaseProjectID != "" {
+			// Supabase Direct Connection (IPv6 connection likely)
+			log.Println("Initializing Supabase connection... (Supabase 연결 초기화 중)")
+			dbPassword := os.Getenv("SUPABASE_PASSWORD")
+
+			targetHost := "aws-1-ap-south-1.pooler.supabase.com"
+			userName := fmt.Sprintf("postgres.%s", supabaseProjectID)
+
+			dsn = fmt.Sprintf("host=%s user=%s password=%s dbname=postgres port=5432 sslmode=disable TimeZone=Asia/Seoul",
+				targetHost,
+				userName,
+				dbPassword,
+			)
+		} else if dbHost != "" {
+			// 일반 PostgreSQL 연결 설정
+			log.Println("Initializing Standard PostgreSQL connection... (일반 PostgreSQL 연결 초기화 중)")
+			dsn = fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=Asia/Seoul",
+				dbHost,
+				os.Getenv("DB_USER"),
+				os.Getenv("DB_PASSWORD"),
+				os.Getenv("DB_NAME"),
+				os.Getenv("DB_PORT"),
+			)
+		} else {
+			return fmt.Errorf("no database configuration found (DB 설정이 없습니다)")
+		}
+	}
 
 	var err error
 	// 1. GORM을 사용하여 PostgreSQL 드라이버로 연결

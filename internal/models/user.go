@@ -14,6 +14,7 @@ type User struct {
 	VMs           []VirtualMachine // 사용자가 소유한 VM 목록
 	Deployments   []Deployment     // 사용자가 배포한 웹 서비스 목록
 	Namespace     string           `gorm:"column:namespace;not null"` // K8s 네임스페이스 무조건 있음...
+	Email 		string	`gorm:"column:email;not null"`
 }
 
 // HashPassword 함수는 평문 비밀번호를 bcrypt 알고리즘을 사용하여 해시화합니다.

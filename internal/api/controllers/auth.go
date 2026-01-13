@@ -71,3 +71,33 @@ func (authController *AuthController) Login(c *gin.Context) {
 	c.SetCookie("authorization", "Bearer "+tokenString, 86400, "/", "", true, true)
 	c.JSON(http.StatusOK, gin.H{"message": "로그인 성공"})
 }
+
+type CreateAccountParams struct {
+	StudentId string `json:"student_id"`
+	Password  string `json:"password"`
+	Name      string `json:"name"`
+	Email		string `json:"email"`
+}
+
+func (a *AuthController) CreateAccount (c *gin.Context) {
+	var createAccountParams CreateAccountParams
+
+	if err := c.ShouldBindJSON(&createAccountParams); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "계정 생성 정보를 정확하게 전달하세요."})
+		return
+	}
+
+	user, err := a.userService.CreateUser(userservice.CreateUserParams{
+		StudentId: createAccountParams.StudentId,
+		Password:  createAccountParams.Password,
+		Name:      createAccountParams.Name,
+		Email:     createAccountParams.Email,
+	})
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "계정 생성 실패"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "계정 생성 성공", "user": user})
+}

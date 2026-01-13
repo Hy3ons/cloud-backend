@@ -3,6 +3,7 @@ kind: Service
 
 metadata:
   name: vps-access-{{VM_NAME}}
+  namespace: {{NAMESPACE}}
 
 spec:
   type: NodePort

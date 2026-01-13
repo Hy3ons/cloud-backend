@@ -1,13 +1,15 @@
 package controllers
 
 import (
-	gin "github.com/gin-gonic/gin"
 	http "net/http"
 	sync "sync"
 	"vm-controller/internal/middleware"
 	k8s_service "vm-controller/internal/services/k8s_service"
 	userservice "vm-controller/internal/services/user_service"
 	vm_service "vm-controller/internal/services/vm_service"
+
+	gin "github.com/gin-gonic/gin"
+	cast "github.com/spf13/cast"
 )
 
 type VirtualMachineController struct {
@@ -80,13 +82,17 @@ func (vmC *VirtualMachineController) CreateVM(c *gin.Context) {
 	}
 
 	//database 등록 절차를 가져야함.
-	//
 
 	c.JSON(http.StatusOK, gin.H{"vm": vm})
 }
 
 func (vmC *VirtualMachineController) FetchUserVMs(c *gin.Context) {
-	user_id, _ := c.Get("user_id")
+	user_id, ok := c.Get("user_id")
+
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user_id"})
+		return
+	}
 
 	vms, err := vmC.vmService.FetchUserVMs(user_id.(string), false)
 
@@ -113,9 +119,15 @@ func (vmC *VirtualMachineController) StopVM(c *gin.Context) {
 		return
 	}
 
-	vm, _ := vmC.vmService.FetchVmName(req.VmName, false)
+	u64, err := cast.ToUintE(user_id)
 
-	if string(vm.UserID) != user_id.(string) {
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user_id controller 121:30 Switching Error"})
+		return
+	}
+
+	vm, _ := vmC.vmService.FetchVmName(req.VmName, false)
+	if vm.UserID != u64 {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
@@ -139,9 +151,14 @@ func (vmC *VirtualMachineController) StartVM(c *gin.Context) {
 		return
 	}
 
-	vm, _ := vmC.vmService.FetchVmName(req.VmName, false)
+	u64, err := cast.ToUintE(user_id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user_id controller 155:30 Switching Error"})
+		return
+	}
 
-	if string(vm.UserID) != user_id.(string) {
+	vm, _ := vmC.vmService.FetchVmName(req.VmName, false)
+	if vm.UserID != u64 {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
@@ -165,9 +182,17 @@ func (vmC *VirtualMachineController) DeleteVM(c *gin.Context) {
 		return
 	}
 
-	vm, _ := vmC.vmService.FetchVmName(req.VmName, false)
+	u64, err := cast.ToUintE(user_id)
 
-	if string(vm.UserID) != user_id.(string) {
+	// 파싱 오류 확인.
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user_id controller 155:30 Switching Error"})
+		return
+	}
+
+	vm, _ := vmC.vmService.FetchVmName(req.VmName, false)
+	// 소유권 확인.
+	if vm.UserID != u64 {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}

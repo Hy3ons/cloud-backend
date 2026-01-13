@@ -2,12 +2,23 @@ kind: NetworkPolicy
 apiVersion: networking.k8s.io/v1
 metadata:
   name: deny-from-other-namespaces
+  namespace: {{NAMESPACE}}
 
 spec:
   podSelector: {} # 이 네임스페이스의 모든 파드에 적용
   ingress:
   - from:
     - podSelector: {} # 자기 네임스페이스 내부 통신만 허용
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cloud-admin #CDI 복제를 위한 네임스페이스 허용 및 감사 허용
+  
+  - from:
+    -ipBlock:
+      cidr: 0.0.0.0/0
+    ports:
+      - protocol: TCP
+        port: 22
 
 ---
 kind: NetworkPolicy

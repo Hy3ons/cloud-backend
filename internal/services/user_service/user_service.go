@@ -2,6 +2,7 @@ package userservice
 
 import (
 	"errors"
+	"fmt"
 	"vm-controller/internal/db"
 	"vm-controller/internal/models"
 )
@@ -49,4 +50,42 @@ func (s *UserService) FetchUserByStudentId(studentId string) (*models.User, erro
 	}
 
 	return &user, nil
+}
+
+type CreateUserParams struct {
+	StudentId string
+	Password  string
+	Name      string
+	Email     string
+}
+
+func (s *UserService) CreateUser(params CreateUserParams) (*models.User, error) {
+	database := db.GetDB()
+
+	hashedPassword, err := models.HashPassword(params.Password)
+
+	if err != nil {
+		return nil, fmt.Errorf("비밀번호 해싱 실패: %v", err)
+	}
+
+	id := database.Create(&models.User{
+		Username: params.Name,
+		UserStudentId: params.StudentId,
+		PasswordHash: hashedPassword,
+		Email: params.Email,
+	})
+
+	if id.Error != nil {
+		return nil, fmt.Errorf("유저 생성 실패: %v", id.Error)
+	}
+
+	var user *models.User
+
+	if err := database.First(&user, id).Error; err != nil {
+		return nil, fmt.Errorf("유저 조회 실패: %v", err)
+	}
+
+	user.PasswordHash = ""
+
+	return user, nil
 }

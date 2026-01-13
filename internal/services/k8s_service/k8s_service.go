@@ -3,6 +3,7 @@ package k8s_service
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -50,17 +51,53 @@ type DeploymentParams struct {
 func GetK8sService() (*K8sService, error) {
 	var err error
 	once.Do(func() {
-		// 1. Config 생성 (InCluster 우선, 실패시 로컬 kubeconfig)
 		var config *rest.Config
-		config, err = rest.InClusterConfig()
-		if err != nil {
-			// fallback to local kubeconfig
-			kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
-			if _, errExists := os.Stat(kubeconfig); errExists == nil {
-				config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+
+		// 1. Custom Secret Mounting Logic (User Request)
+		// 사용자가 지정한 로직: /mnt/secrets의 토큰과 CA 인증서를 사용하여 Config 생성
+		tokenPath := "/mnt/secrets/token"
+		caPath := "/mnt/secrets/ca.crt"
+
+		if _, errStat := os.Stat(tokenPath); errStat == nil {
+			// API 서버 주소 설정 (기본값: 10.43.0.1)
+			host := os.Getenv("KUBERNETES_SERVICE_HOST")
+			if host == "" {
+				host = "10.43.0.1"
+			}
+			port := os.Getenv("KUBERNETES_SERVICE_PORT")
+			if port == "" {
+				port = "443"
+			}
+
+			token, errRead := os.ReadFile(tokenPath)
+			if errRead == nil {
+				config = &rest.Config{
+					Host: "https://" + net.JoinHostPort(host, port),
+					TLSClientConfig: rest.TLSClientConfig{
+						CAFile: caPath,
+					},
+					BearerToken: string(token),
+				}
+				fmt.Printf("Using Custom K8s Config from %s with Host %s\n", tokenPath, config.Host)
+			} else {
+				fmt.Printf("Failed to read token from %s: %v\n", tokenPath, errRead)
 			}
 		}
+
+		// 2. 만약 Custom Config가 생성되지 않았다면 기존 로직 시도 (InCluster -> fallback)
+		if config == nil {
+			config, err = rest.InClusterConfig()
+			if err != nil {
+				// fallback to standard kubeconfig loading (KUBECONFIG env or ~/.kube/config)
+				loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+				configOverrides := &clientcmd.ConfigOverrides{}
+				kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+				config, err = kubeConfig.ClientConfig()
+			}
+		}
+
 		if err != nil {
+			// 마지막으로 fallback 메시지만 남김
 			err = fmt.Errorf("failed to get k8s config: %v", err)
 			return
 		}
@@ -273,6 +310,7 @@ func (s *K8sService) CreateUserVM(userNamespace, vmName, password, dnsHost, mani
 // applyManifests iterates over yamls in a directory, applies replacements, and creates resources.
 // ignoreExists: if true, "already exists" error is ignored and resource is NOT returned as created.
 func (s *K8sService) applyManifests(dir string, replacements map[string]string, defaultNamespace string, ignoreExists bool) ([]CreatedResource, error) {
+	fmt.Println("Applying manifests from directory:", dir)
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory %s: %v", dir, err)
@@ -389,7 +427,70 @@ func (s *K8sService) deleteResource(res CreatedResource) error {
 }
 
 func (s *K8sService) DeleteVM(vm *models.VirtualMachine) error {
-	// TODO/
+	err := vmservice.GetVmService().DeleteVm(vm.Name)
+	if err != nil {
+		return err
+	}
+
+	// VM 리소스 삭제
+	err = s.deleteResource(CreatedResource{
+		Version:   "v1",
+		Kind:      "Service",
+		Name:      "vps-access-" + vm.Name,
+		Namespace: vm.Namespace,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	err = s.deleteResource(CreatedResource{
+		Group:     "networking.k8s.io",
+		Version:   "v1",
+		Kind:      "Ingress",
+		Name:      "vm-ingress-" + vm.Name,
+		Namespace: vm.Namespace,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	err = s.deleteResource(CreatedResource{
+		Group:     "kubevirt.io",
+		Version:   "v1",
+		Kind:      "VirtualMachine",
+		Name:      vm.Name,
+		Namespace: vm.Namespace,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	err = s.deleteResource(CreatedResource{
+		Version:   "v1",
+		Kind:      "Secret",
+		Name:      vm.Name + "-cloud-init-userdata",
+		Namespace: vm.Namespace,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	err = s.deleteResource(CreatedResource{
+		Group:     "cdi.kubevirt.io",
+		Version:   "v1beta1",
+		Kind:      "DataVolume",
+		Name:      vm.Name + "-disk",
+		Namespace: vm.Namespace,
+	})
+
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 

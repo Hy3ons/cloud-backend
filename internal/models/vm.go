@@ -25,4 +25,5 @@ type VirtualMachine struct {
 	DiskNum   string       `gorm:"column:disk_num"`                  // 디스크 접미사 번호 (트래킹용, 선택적)
 	Status    EnumVmStatus `gorm:"column:status"`                    // VM 상태 (예: "Provisioned", "Failed")
 	Image     string       `gorm:"column:image"`                     // VM 이미지
+	IsDeleted bool         `gorm:"column:is_deleted"`                // VM 삭제 여부
 }

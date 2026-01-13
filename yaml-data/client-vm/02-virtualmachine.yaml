@@ -24,35 +24,5 @@ spec:
           dataVolume: { name: {{VM_NAME}}-disk }
         - name: cloudinitdisk
           cloudInitNoCloud:
-            userData: |-
-              #cloud-config
-              # 1. Root 계정 보안 및 접근 설정
-              ssh_deletekeys: false
-              hostname: {{HOSTNAME}}
-              disable_root: false
-              ssh_pwauth: true
-              password: {{PASSWORD}}
-              chpasswd: 
-                list: |
-                  root:{{PASSWORD}}
-                expire: False
-
-              # 2. 시스템 부팅 시 실행할 명령어 (런타임 설정)
-              runcmd:
-                # SSHD 설정 수정: Root 로그인 및 비밀번호 인증 허용
-                - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
-                - sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-                
-                # SSH 서비스 재시작 (변경사항 적용)
-                - systemctl restart ssh
-                
-                # 터미널 프롬프트 설정 (요청하신 초록색 호스트네임)
-                - echo 'export PS1="\[\e[32m\]\u@\h\[\e[m\]:\[\e[34m\]\w\[\e[m\]\$ "' >> /root/.bashrc
-                
-                # (옵션) 환영 메시지 추가
-                - apt-get update
-                - apt-get install -y figlet
-                - figlet "KubeVirt Cloud" > /etc/motd
-
-              # 3. 마지막 리포트 생성 (디버깅용)
-              final_message: "The system is finally up, after $UPTIME seconds"
+            secretRef:
+              name : {{VM_NAME}}-cloud-init-userdata

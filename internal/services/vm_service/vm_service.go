@@ -75,7 +75,6 @@ func (vmService *VmService) CreateUserVM(params CreateVmParams) (*models.Virtual
 		Namespace: params.Namespace,
 		Password:  params.VmPassword,
 		NodePort:  params.VmSSHPort,
-		DiskNum:   params.VmDiskNum,
 		UserID:    params.UserID,
 		Image:     params.VmImage,
 		Status:    models.VmStatusProvisioning,

@@ -69,12 +69,18 @@ func (vmC *VirtualMachineController) CreateVM(c *gin.Context) {
 		return
 	}
 
-	user, _ := vmC.userService.FetchUserById(user_id.(string))
+	user, _ := vmC.userService.FetchUserById(user_id.(string), true)
 
-	var signed_port int32
+	signed_port, err := vmC.vmService.GetAvailablePort()
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get available port"})
+		return
+	}
+
 
 	vm, err := vmC.k8sService.CreateUserVM(user.Namespace,
-		req.VmName, req.VmSSHPassword, req.VmHost, "yaml-data/client-vm", signed_port)
+		req.VmName, req.VmSSHPassword, req.VmHost, "yaml-data/client-vm", cast.ToInt32(signed_port))
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create VM"})
@@ -82,6 +88,20 @@ func (vmC *VirtualMachineController) CreateVM(c *gin.Context) {
 	}
 
 	//database 등록 절차를 가져야함.
+	_, err = vmC.vmService.CreateUserVM(vm_service.CreateVmParams{
+		VmName:        req.VmName,
+		VmPassword:    req.VmSSHPassword,
+		VmImage:       req.VmImage,
+		DnsHost:       req.VmHost,
+		Namespace:     user.Namespace,
+		UserID:        user.ID,
+		VmSSHPort:     cast.ToInt32(signed_port),
+	})
+	
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create VM"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"vm": vm})
 }

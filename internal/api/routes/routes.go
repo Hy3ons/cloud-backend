@@ -16,6 +16,7 @@ func SetupRouter() *gin.Engine {
 	api := r.Group("/api")
 	controllers.GetAuthController().RegisterRoutes(api)
 	controllers.GetVirtualMachineController().RegisterRoutes(api)
+	controllers.GetUserController().RegisterRoutes(api)
 	controllers.GetTestController().RegisterRoutes(api)
 
 	return r

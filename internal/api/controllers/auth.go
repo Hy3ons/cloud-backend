@@ -76,10 +76,10 @@ type CreateAccountParams struct {
 	StudentId string `json:"student_id"`
 	Password  string `json:"password"`
 	Name      string `json:"name"`
-	Email		string `json:"email"`
+	Email     string `json:"email"`
 }
 
-func (a *AuthController) CreateAccount (c *gin.Context) {
+func (a *AuthController) CreateAccount(c *gin.Context) {
 	var createAccountParams CreateAccountParams
 
 	if err := c.ShouldBindJSON(&createAccountParams); err != nil {

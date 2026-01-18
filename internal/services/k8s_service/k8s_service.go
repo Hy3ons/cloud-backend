@@ -491,6 +491,17 @@ func (s *K8sService) DeleteVM(vm *models.VirtualMachine) error {
 		return err
 	}
 
+	err = s.deleteResource(CreatedResource{
+		Version:   "v1",
+		Kind:      "Service",
+		Name:      "vps-web-" + vm.Name,
+		Namespace: vm.Namespace,
+	})
+
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 

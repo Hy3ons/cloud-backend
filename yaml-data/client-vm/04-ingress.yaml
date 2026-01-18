@@ -19,10 +19,10 @@ metadata:
     traefik.ingress.kubernetes.io/router.middlewares: cloud-admin-vm-cloud-admin-vm-traffic-interceptor@kubernetescrd
 
 spec:
-  # tls:
-  #   - hosts:
-  #     - vps.hy3on.site
-  #     secretName: vps-tls-secret # SSL 인증서가 담긴 Secret
+   tls:
+     - hosts:
+       - {{DNS_HOST}}
+      # secretName: global-tls-secret # SSL 인증서가 담긴 Secret
 
   rules:
     - host: {{DNS_HOST}}

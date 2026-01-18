@@ -2,6 +2,8 @@ package controllers
 
 import (
 	http "net/http"
+	"os"
+	"regexp"
 	sync "sync"
 	"vm-controller/internal/middleware"
 	k8s_service "vm-controller/internal/services/k8s_service"
@@ -56,7 +58,7 @@ type CreateVMParams struct {
 	VmName        string `json:"vm_name"`
 	VmSSHPassword string `json:"vm_ssh_password"`
 	VmImage       string `json:"vm_image"`
-	VmHost        string `json:"vm_host"`
+	VmHostPrefix  string `json:"vm_host_prefix"`
 }
 
 func (vmC *VirtualMachineController) CreateVM(c *gin.Context) {
@@ -78,9 +80,17 @@ func (vmC *VirtualMachineController) CreateVM(c *gin.Context) {
 		return
 	}
 
+	// VmHostPrefix가 유효한 도메인 형식(예: prefix.domain.com)인지 검사합니다.
+	// 도메인 네임으로 사용될 것이므로 DNS 규약을 준수해야 합니다.
+	if matched, _ := regexp.MatchString(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`, req.VmHostPrefix); !matched {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "VmHostPrefix must be in a valid domain format (e.g., prefix.domain.com)"})
+		return
+	}
+
+	hostname := req.VmHostPrefix + os.Getenv("HOSTNAME")
 
 	vm, err := vmC.k8sService.CreateUserVM(user.Namespace,
-		req.VmName, req.VmSSHPassword, req.VmHost, "yaml-data/client-vm", cast.ToInt32(signed_port))
+		req.VmName, req.VmSSHPassword, hostname, "yaml-data/client-vm", cast.ToInt32(signed_port))
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create VM"})
@@ -92,7 +102,7 @@ func (vmC *VirtualMachineController) CreateVM(c *gin.Context) {
 		VmName:        req.VmName,
 		VmPassword:    req.VmSSHPassword,
 		VmImage:       req.VmImage,
-		DnsHost:       req.VmHost,
+		DnsHost:       hostname,
 		Namespace:     user.Namespace,
 		UserID:        user.ID,
 		VmSSHPort:     cast.ToInt32(signed_port),

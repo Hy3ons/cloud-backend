@@ -23,5 +23,7 @@ func SetupRouter() *gin.Engine {
 		controllers.GetTestController().RegisterRoutes(api)
 	}
 
+	controllers.GetInterceptor().RegisterRoutes(api)
+
 	return r
 }

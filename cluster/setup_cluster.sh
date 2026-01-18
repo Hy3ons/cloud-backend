@@ -44,3 +44,5 @@ kubectl create -f https://github.com/kubevirt/containerized-data-importer/releas
 echo "✅ Installation Completed Successfully!"
 echo "   - K3s, KubeVirt, virtctl, and CDI have been installed."
 echo "   - Config file is at: /etc/rancher/k3s/k3s.yaml"
+
+echo "Start to Setup Backend..."

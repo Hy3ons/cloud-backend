@@ -14,8 +14,6 @@ func main() {
 	// 1. 설정 로드 (Configuration)
 	config := config.Load()
 
-
-
 	// 2. K8s 연결 확인 (K8s Connection Check)
 	k8sService, err := k8s_service.GetK8sService()
 	if err != nil {

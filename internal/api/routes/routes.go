@@ -10,11 +10,9 @@ import (
 func SetupRouter() *gin.Engine {
 	r := gin.Default()
 
-	// Health Check
-	controllers.GetHealthController().RegisterRoutes(r.Group("/"))
-
 	// API Group
 	api := r.Group("/api")
+	controllers.GetHealthController().RegisterRoutes(api)
 	controllers.GetAuthController().RegisterRoutes(api)
 	controllers.GetVirtualMachineController().RegisterRoutes(api)
 	controllers.GetUserController().RegisterRoutes(api)

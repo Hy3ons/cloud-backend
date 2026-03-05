@@ -129,6 +129,7 @@ func (vmService *VmService) GetAvailablePort() (int, error) {
 	// 가장 낮은 가용 포트 탐색 (Find lowest available port)
 	for port := 30003; port <= 30300; port++ {
 		if !portMap[port] {
+			fmt.Println("Available port:", port)
 			return port, nil
 		}
 	}

@@ -14,15 +14,15 @@ spec:
           kubernetes.io/metadata.name: cloud-admin #CDI 복제를 위한 네임스페이스 허용 및 감사 허용
   
   - from:
-    -ipBlock:
-      cidr: 0.0.0.0/0
+    - ipBlock:
+        cidr: 0.0.0.0/0
     ports:
       - protocol: TCP
         port: 22
 
   - from:
-    -ipBlock:
-      cidr: 0.0.0.0/0
+    - ipBlock:
+        cidr: 0.0.0.0/0
     ports:
       - protocol: TCP
         port: 80
@@ -31,20 +31,17 @@ spec:
 kind: NetworkPolicy
 apiVersion: networking.k8s.io/v1
 metadata:
-  name: strict-egress-isolation
+  name: tenant-isolation-egress
   namespace: {{NAMESPACE}}
-
 spec:
-  podSelector: {} # 네임스페이스 내 모든 VM/Pod 적용
+  podSelector: {}
   policyTypes:
   - Egress
   egress:
 
-  # 자기 네임스페이스 내부 통신 허용
   - to:
-    - podSelector: {} # 자기 네임스페이스 내부 통신 허용
+    - podSelector: {}
 
-  # 1. DNS 쿼리 허용 (이게 없으면 도메인 해석이 안 되어 외부 인터넷도 불가)
   - to:
     - namespaceSelector:
         matchLabels:
@@ -58,15 +55,20 @@ spec:
     - protocol: TCP
       port: 53
 
+  # 3. Kubernetes API Server 접근 (최소한의 제어권)
+  # Pod가 K8s 리소스를 조회해야 할 경우를 대비해 API Server IP만 콕 찍어 허용합니다.
+  - to:
+    - ipBlock:
+        cidr: 10.43.0.1/32 
+    ports:
+    - protocol: TCP
+      port: 443
 
-
-  # 2. 외부 인터넷 통신 허용 (단, 사설 IP 대역은 제외)
-  # 클라우드 메타데이터(169.254.169.254)와 내부망(10.0.0.0/8 등) 접근을 원천 차단
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
         except:
-        - 10.0.0.0/8       # 쿠버네티스 내부 Pod 대역 (환경에 맞게 수정)
-        - 172.16.0.0/12    # 서비스/노드 대역
-        - 192.168.0.0/16   # 로컬 사설 대역
-        - 169.254.169.254/32 # 클라우드 메타데이터 API (핵심 차단 대상)
+        - 10.0.0.0/8          # K3s Pod/Service 대역 (내부망 전체)
+        - 172.16.0.0/12       # Docker/기타 사설망
+        - 192.168.0.0/16      # 로컬 네트워크
+        - 169.254.169.254/32  # 클라우드 메타데이터 (가장 위험)

@@ -7,7 +7,7 @@ metadata:
 spec:
   source:
     pvc:
-      name: ubuntu-2204-gold-source
+      name: {{VM_IMAGE}}
       namespace: cloud-admin      # 다른 네임스페이스의 원본을 참조
 
   pvc:
@@ -15,4 +15,4 @@ spec:
     storageClassName: local-path # local-path
     resources:
       requests:
-        storage: 20Gi
+        storage: 30Gi

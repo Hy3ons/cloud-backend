@@ -38,7 +38,7 @@ func (c *UserController) RegisterRoutes(group *gin.RouterGroup) {
 		userGroup.POST("/create", c.CreateUser)
 
 		// 내 정보 조회 (Get My Info) - Auth 미들웨어 필요하다고 가정
-		userGroup.GET("/me", c.GetMe, middleware.AuthGuard())
+		userGroup.GET("/me", middleware.AuthGuard(), c.GetMe)
 	}
 }
 

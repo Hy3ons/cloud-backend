@@ -70,3 +70,125 @@ Kubernetes와 KubeVirt 기술을 기반으로 하여, 클라우드 네이티브 
     ```bash
     go run cmd/server/main.go
     ```
+
+---
+
+## 📡 API Reference
+
+`/test` 엔드포인트를 제외한 주요 API 명세입니다.
+
+### 1. Health Check
+서버 상태 및 Kubernetes 연결 상태를 확인합니다.
+
+*   **URL**: `/health`
+*   **Method**: `GET`
+*   **Response**:
+    ```json
+    {
+      "status": "ok",
+      "k8s_connectivity": "healthy"
+    }
+    ```
+
+### 2. Authentication (Auth) 
+*   **Base URL**: `/api/auth`
+
+#### 로그인 (Login)
+*   **URL**: `/login`
+*   **Method**: `POST`
+*   **Body (JSON)**:
+    ```json
+    {
+      "student_id": "20201234",
+      "password": "your_password"
+    }
+    ```
+*   **Response**: `200 OK` (Set-Cookie `authorization`)
+
+### 3. User Management
+*   **Base URL**: `/api/users`
+
+#### 회원 가입 (Create User)
+*   **URL**: `/create`
+*   **Method**: `POST`
+*   **Body (JSON)**:
+    ```json
+    {
+      "studentId": "20201234",
+      "password": "your_password",
+      "name": "홍길동",
+      "email": "example@univ.ac.kr"
+    }
+    ```
+*   **Response**: `201 Created`
+
+#### 내 정보 조회 (Get My Info)
+*   **URL**: `/me`
+*   **Method**: `GET`
+*   **Headers**: `Cookie: authorization=Bearer <token>`
+*   **Response**: `200 OK`
+
+### 4. Virtual Machine (VM)
+VM 생성 및 관리는 인증이 필요합니다.
+*   **Base URL**: `/api/vm`
+*   **Headers**: `Cookie: authorization=Bearer <token>`
+
+#### VM 생성 (Create VM)
+*   **URL**: `/create`
+*   **Method**: `POST`
+*   **Body (JSON)**:
+    ```json
+    {
+      "vm_name": "my-ubuntu-vm",
+      "vm_ssh_password": "ssh_password_123",
+      "vm_image": "ubuntu-20.04", 
+      "vm_host_prefix": "myvm" 
+    }
+    ```
+    *   `vm_host_prefix`: DNS 서브도메인으로 사용됨 (예: `myvm.cloud.com`).
+
+#### VM 목록 조회 (Fetch User VMs)
+*   **URL**: `/fetch`
+*   **Method**: `GET`
+*   **Response**: 사용자의 VM 목록 반환.
+
+#### VM 시작 (Start VM)
+*   **URL**: `/start`
+*   **Method**: `POST`
+*   **Body (JSON)**:
+    ```json
+    {
+      "vm_name": "my-ubuntu-vm"
+    }
+    ```
+
+#### VM 중지 (Stop VM)
+*   **URL**: `/stop`
+*   **Method**: `POST`
+*   **Body (JSON)**:
+    ```json
+    {
+      "vm_name": "my-ubuntu-vm"
+    }
+    ```
+
+#### VM 삭제 (Delete VM)
+*   **URL**: `/delete`
+*   **Method**: `DELETE`
+*   **Body (JSON)**:
+    ```json
+    {
+      "vm_name": "my-ubuntu-vm"
+    }
+    ```
+
+### 5. Security Interceptor
+Traefik 등 Ingress Controller에서 사용하는 내부 보안 검사 API입니다.
+
+*   **Base URL**: `/api`
+*   **URL**: `/intercept`
+*   **Method**: `GET`
+*   **Headers**:
+    *   `X-Forwarded-Method`: 원본 요청 메서드
+    *   `X-Forwarded-Uri`: 원본 요청 URI
+*   **Description**: SQL Injection, XSS, Path Traversal 등의 공격 패턴을 탐지하고 차단합니다.

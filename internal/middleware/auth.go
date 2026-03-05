@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"os"
 	strings "strings"
 
 	gin "github.com/gin-gonic/gin"
@@ -17,6 +18,7 @@ func AuthGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 1. 쿠키에서 "authorization" 값 가져오기
 		tokenString, err := c.Cookie("authorization")
+		tokenString = strings.Replace(tokenString, "+", " ", 1)
 
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "로그인 토큰이 없습니다."})
@@ -39,7 +41,7 @@ func AuthGuard() gin.HandlerFunc {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
-			return []byte("secret"), nil
+			return []byte(os.Getenv("JWT_SECRET")), nil
 		})
 
 		if err != nil {

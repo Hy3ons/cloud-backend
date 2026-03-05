@@ -60,7 +60,7 @@ func (t *TestController) TestCreateVM(c *gin.Context) {
 		return
 	}
 
-	vminfo, err := service.CreateUserVM(req.UserNamespace, req.VmName, req.Password, req.DnsHost, "yaml-data/client-vm", 30005)
+	vminfo, err := service.CreateUserVM(req.UserNamespace, req.VmName, req.Password, req.DnsHost, "yaml-data/client-vm", "ubuntu-2204-gold-source", 30005)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

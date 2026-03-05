@@ -16,12 +16,12 @@ metadata:
     traefik.ingress.kubernetes.io/router.tls: "true"
 
     # 트래픽 인터셉터 추가 (MiddleWare)
-    traefik.ingress.kubernetes.io/router.middlewares: cloud-admin-vm-cloud-admin-vm-traffic-interceptor@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: cloud-admin-vm-traffic-interceptor@kubernetescrd
 
 spec:
-   tls:
-     - hosts:
-       - {{DNS_HOST}}
+  tls:
+    - hosts:
+      - {{DNS_HOST}}
       # secretName: global-tls-secret # SSL 인증서가 담긴 Secret
 
   rules:
@@ -32,6 +32,6 @@ spec:
           pathType: Prefix
           backend:
             service:
-              name: vm-web-{{VM_NAME}}
+              name: vps-web-{{VM_NAME}}
               port:
                 number: 80

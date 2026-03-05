@@ -225,7 +225,7 @@ type VMInfo struct {
 }
 
 // CreateUserVM creates resources defined in yaml-data/client-vm
-func (s *K8sService) CreateUserVM(userNamespace, vmName, password, dnsHost, manifestDir string, vmPort int32) (*VMInfo, error) {
+func (s *K8sService) CreateUserVM(userNamespace, vmName, password, dnsHost, manifestDir, imageName string, vmPort int32) (*VMInfo, error) {
 	// manifestDir := "yaml-data/client-vm" // 실행 위치 기준
 
 	// Yaml에 그대로 넣지만, Injection검사를 시행.
@@ -242,7 +242,7 @@ func (s *K8sService) CreateUserVM(userNamespace, vmName, password, dnsHost, mani
 	}
 
 	// 롤백을 위한 성공 여부 플래그
-	var success bool
+	var success bool = false
 	// 이 함수에서 생성한 모든 리소스를 추적 (init + vm)
 	var allCreatedResources []CreatedResource
 
@@ -261,26 +261,34 @@ func (s *K8sService) CreateUserVM(userNamespace, vmName, password, dnsHost, mani
 		}
 	}()
 
-	// 1. Client Init Resources (yaml-data/client-init) - 이미 존재하면 무시(Skip)
-	// manifestDir가 "yaml-data/client-vm"이라면 상위 폴더의 client-init을 찾음
-	initDir := filepath.Join(filepath.Dir(manifestDir), "client-init")
-	// 혹시 경로가 안맞을 수 있으니 단순 하드코딩 백업 혹은 체크
-	if _, err := os.Stat(initDir); os.IsNotExist(err) {
-		// manifestDir와 관계없이 절대 경로 혹은 상대 경로로 체크해볼 수도 있음.
-		// 여기서는 "yaml-data/client-init"을 기본으로 시도
-		initDir = "yaml-data/client-init"
-	}
-
 	initReplacements := map[string]string{
 		"{{NAMESPACE}}": userNamespace,
 	}
 
-	initCreated, err := s.applyManifests(initDir, initReplacements, userNamespace, true)
+	initCreated, err := s.applyManifests("yaml-data/client-init", initReplacements, userNamespace, true)
+	allCreatedResources = append(allCreatedResources, initCreated...)
+
 	if err != nil {
 		// init 과정 실패 시에도 롤백 발동 (여기까지 생성된 것 삭제)
 		return nil, fmt.Errorf("failed to apply client-init manifests: %v", err)
 	}
-	allCreatedResources = append(allCreatedResources, initCreated...)
+
+	// Next CloudInit Create.
+	cloudInitReplacements := map[string]string{
+		"{{NAMESPACE}}": userNamespace,
+		"{{VM_NAME}}":   vmName,
+		"{{PASSWORD}}":  password,
+		"{{DNS_HOST}}":  dnsHost,
+	}
+
+	targetYaml := fmt.Sprintf("yaml-data/client-vm-cloudinit/%s.yaml", imageName)
+	cloudInitCreated, err := s.applyManifests(targetYaml, cloudInitReplacements, userNamespace, true)
+	allCreatedResources = append(allCreatedResources, cloudInitCreated...)
+
+	if err != nil {
+		// init 과정 실패 시에도 롤백 발동 (여기까지 생성된 것 삭제)
+		return nil, fmt.Errorf("failed to apply client-init manifests: %v", err)
+	}
 
 	// 2. Client VM Resources (yaml-data/client-vm)
 	vmReplacements := map[string]string{
@@ -289,13 +297,15 @@ func (s *K8sService) CreateUserVM(userNamespace, vmName, password, dnsHost, mani
 		"{{VM_NAME}}":   vmName,
 		"{{DNS_HOST}}":  dnsHost,
 		"{{PASSWORD}}":  password,
+		"{{VM_IMAGE}}":  imageName,
 	}
 
-	vmCreated, err := s.applyManifests(manifestDir, vmReplacements, userNamespace, false)
+	vmCreated, err := s.applyManifests("yaml-data/client-vm", vmReplacements, userNamespace, false)
+	allCreatedResources = append(allCreatedResources, vmCreated...)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to apply client-vm manifests: %v", err)
 	}
-	allCreatedResources = append(allCreatedResources, vmCreated...)
 
 	// 성공적으로 완료되었음을 표시 (롤백 방지)
 	success = true
@@ -309,26 +319,40 @@ func (s *K8sService) CreateUserVM(userNamespace, vmName, password, dnsHost, mani
 
 // applyManifests iterates over yamls in a directory, applies replacements, and creates resources.
 // ignoreExists: if true, "already exists" error is ignored and resource is NOT returned as created.
-func (s *K8sService) applyManifests(dir string, replacements map[string]string, defaultNamespace string, ignoreExists bool) ([]CreatedResource, error) {
-	fmt.Println("Applying manifests from directory:", dir)
-	files, err := os.ReadDir(dir)
+func (s *K8sService) applyManifests(path string, replacements map[string]string, defaultNamespace string, ignoreExists bool) ([]CreatedResource, error) {
+	fmt.Println("Applying manifests from path:", path)
+	var filePaths []string
+
+	info, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read directory %s: %v", dir, err)
+		return nil, fmt.Errorf("failed to stat path %s: %v", path, err)
+	}
+
+	if info.IsDir() {
+		files, err := os.ReadDir(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read directory %s: %v", path, err)
+		}
+
+		for _, file := range files {
+			if !file.IsDir() && strings.HasSuffix(file.Name(), ".yaml") {
+				filePaths = append(filePaths, filepath.Join(path, file.Name()))
+			}
+		}
+	} else {
+		filePaths = append(filePaths, path)
 	}
 
 	var created []CreatedResource
 	decUnstructured := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
 
-	for _, file := range files {
-		if file.IsDir() || !strings.HasSuffix(file.Name(), ".yaml") {
-			continue
+	for _, filePath := range filePaths {
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return created, fmt.Errorf("failed to read file %s: %v", filepath.Base(filePath), err)
 		}
 
-		path := filepath.Join(dir, file.Name())
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return created, fmt.Errorf("failed to read file %s: %v", file.Name(), err)
-		}
+		fileName := filepath.Base(filePath)
 
 		text := string(content)
 		for k, v := range replacements {
@@ -344,7 +368,7 @@ func (s *K8sService) applyManifests(dir string, replacements map[string]string, 
 			obj := &unstructured.Unstructured{}
 			_, gvk, err := decUnstructured.Decode([]byte(doc), nil, obj)
 			if err != nil {
-				return created, fmt.Errorf("failed to decode yaml in %s: %v", file.Name(), err)
+				return created, fmt.Errorf("failed to decode yaml in %s: %v", fileName, err)
 			}
 
 			// Namespace 설정 (없는 경우 defaultNamespace 주입)
@@ -407,6 +431,7 @@ func (s *K8sService) deleteResource(res CreatedResource) error {
 		Version: res.Version,
 		Kind:    res.Kind,
 	}
+
 	mapping, err := s.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
 		return err
@@ -542,6 +567,43 @@ func (s *K8sService) waitForVMStatus(namespace, name, desiredStatus string) erro
 	}
 }
 
+// WaitForVMProvisioning는 VM의 상태가 Running이 될 때까지 폴링합니다.
+// 전달받은 context의 라이프사이클을 따르며, 타임아웃 시 에러를 반환합니다.
+// Timeout을 통해 고루틴 누수를 방지할 수 있습니다.
+func (s *K8sService) WaitForVMProvisioning(ctx context.Context, namespace, name string) error {
+	gvrVM := schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "virtualmachines"}
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled or timed out waiting for VM %s to be provisioned", name)
+		case <-ticker.C:
+			// VM 리소스 조회
+			vmObj, err := s.dynamicClient.Resource(gvrVM).Namespace(namespace).Get(context.Background(), name, metav1.GetOptions{})
+			if err != nil {
+				fmt.Printf("Failed to check VM %s status during provisioning: %v\n", name, err)
+				continue
+			}
+
+			status, found, err := unstructured.NestedString(vmObj.Object, "status", "printableStatus")
+			if !found || err != nil {
+				// 아직 초기화 중
+				continue
+			}
+
+			if strings.EqualFold(status, "Running") {
+				return nil
+			}
+
+			// Failed 등 에러 상태 발생 시 즉시 실패 처리 로직 추가 가능하지만,
+			// KubeVirt가 재시도할 수도 있으니 타임아웃까지 대기하는 편이 안전함.
+		}
+	}
+}
+
 // StopVM은 VM을 중지하고 리소스를 삭제합니다.
 // 1. DB의 VM 상태를 'Stopping'으로 업데이트합니다.
 // 2. K8s 상의 VirtualMachine 리소스만 삭제합니다.
@@ -605,4 +667,16 @@ func (s *K8sService) StartVM(vm *models.VirtualMachine) error {
 	}
 
 	return nil
+}
+
+// GetTotalVMs returns the total number of VirtualMachine resources in the cluster.
+func (s *K8sService) GetTotalVMs() (int, error) {
+	gvr := schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "virtualmachines"}
+
+	list, err := s.dynamicClient.Resource(gvr).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return 0, err
+	}
+
+	return len(list.Items), nil
 }
